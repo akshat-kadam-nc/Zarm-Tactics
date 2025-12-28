@@ -11,6 +11,12 @@ import Phaser from "phaser";
  * - Obstacles, enemy units, turn manager, attacks, terrain, pollution
  */
 
+enum TurnPhase {
+  PlayerMove,
+  PlayerAttack,
+  EnemyTurn
+}
+
 type GridPos = { q: number; r: number }; // q = col, r = row
 type TileKey = string;
 
@@ -110,9 +116,15 @@ type Unit = {
   name: string;
   pos: GridPos;
   hp: number;
+  maxHp: number;
   energy: number;
   moveRange: number;
+  attackRange: number;
+  attackDamage: number;
+  isEnemy: boolean;
+  downed: boolean;
 };
+
 
 type Reachability = {
   reachable: Set<TileKey>;
@@ -184,10 +196,14 @@ class GameScene extends Phaser.Scene {
   private unit!: Unit;
   private unitSprite!: Phaser.GameObjects.Arc;
 
+  private enemies: Unit[] = [];
+  private phase: TurnPhase = TurnPhase.PlayerMove;
+
   private selected = true;
   private reach: Reachability | null = null;
 
   private occupied = new Set<TileKey>();
+  
 
   constructor() {
     super("game");
@@ -217,15 +233,43 @@ class GameScene extends Phaser.Scene {
     this.tileGfx = this.add.graphics();
     this.overlayGfx = this.add.graphics();
 
-    // Create a single Planeteer unit
+    // Create a single Planeteer unit   
     this.unit = {
-      id: "p1",
-      name: "Wheeler",
-      pos: { q: 3, r: 4 },
-      hp: 1500,
-      energy: 1000,
-      moveRange: 2
+    id: "p1",
+    name: "Wheeler",
+    pos: { q: 3, r: 4 },
+    hp: 1500,
+    maxHp: 1500,
+    energy: 1000,
+    moveRange: 2,
+    attackRange: 1,
+    attackDamage: 350,
+    isEnemy: false,
+    downed: false
     };
+
+    this.enemies = [];
+
+    const enemy: Unit = {
+    id: "e1",
+    name: "Ripper",
+    pos: { q: 7, r: 4 },
+    hp: 800,
+    maxHp: 800,
+    energy: 0,
+    moveRange: 1,
+    attackRange: 1,
+    attackDamage: 350,
+    isEnemy: true,
+    downed: false
+    };
+
+    this.enemies.push(enemy);
+    this.occupied.add(keyOf(enemy.pos));
+
+    const eWorld = this.grid.gridToWorld(enemy.pos);
+    this.add.circle(eWorld.x, eWorld.y - 10, 10, 0xff3b3b);
+
 
     this.occupied.add(keyOf(this.unit.pos));
 
@@ -237,6 +281,53 @@ class GameScene extends Phaser.Scene {
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
       const gp = this.grid.worldToGrid(p.worldX, p.worldY);
       if (!gp) return;
+      
+      // Optional: ignore clicks if unit is downed
+      if (this.unit.downed) return;
+
+      // ✅ Handle Attack First
+      if (this.phase === TurnPhase.PlayerAttack) {
+        const target = this.enemies.find(e =>
+        !e.downed &&
+        Math.max(
+            Math.abs(e.pos.q - gp.q), 
+            Math.abs(e.pos.r - gp.r)
+        ) <= this.unit.attackRange);
+
+        console.log("Clicked:", gp, "Enemy:", target.pos);
+
+        if (!target) {
+            console.log("No enemy in attack range");
+            return;
+        }
+
+        console.log("Attacking enemy:", target.id);
+
+        target.hp -= this.unit.attackDamage;
+
+        if (target.hp <= 0) {
+            target.hp = 0;
+            target.downed = true;
+            this.occupied.delete(keyOf(target.pos));
+            console.log("Enemy downed");
+        }
+
+        // End player turn immediately after attacking
+        this.phase = TurnPhase.EnemyTurn;
+
+        // Optional: small delay before enemy acts
+        // ✅ Trigger enemy turn
+        this.time.delayedCall(400, () => {
+            console.log("Enemy turn starts");
+            this.runEnemyTurn();
+        });
+
+        this.redraw();
+        return;
+      }
+
+      // Lock movement to PlayerMove phase
+      if (this.phase !== TurnPhase.PlayerMove) return;
 
       // Clicking near the unit toggles selection (simple UX)
       if (manhattanLikeDiagDistance(gp, this.unit.pos) === 0) {
@@ -266,8 +357,10 @@ class GameScene extends Phaser.Scene {
 
       this.selected = false; // lock during movement
       this.moveUnitAlong(path).then(() => {
+        this.phase = TurnPhase.PlayerAttack;
         this.selected = true;
         this.reach = null;
+        console.log("Phase after move:", this.phase);
         this.redraw();
       });
 
@@ -309,7 +402,7 @@ class GameScene extends Phaser.Scene {
     }
 
     // Overlay reachable tiles if selected
-    if (this.selected) {
+    if (this.selected && this.phase === TurnPhase.PlayerMove) {
       this.reach = bfsReachable(this.grid, this.tiles, this.unit.pos, this.unit.moveRange, this.occupied);
       for (const k of this.reach.reachable) {
         const p = parseKey(k);
@@ -317,6 +410,35 @@ class GameScene extends Phaser.Scene {
         // Do not overlay start tile strongly
         const isStart = (p.q === this.unit.pos.q && p.r === this.unit.pos.r);
         this.drawDiamond(this.overlayGfx, w.x, w.y, 0xffffff, isStart ? 0.10 : 0.22, 0x9ecbff, 1);
+      }
+    }
+
+    // Attack range overlay only during PlayerAttack
+    if (this.phase === TurnPhase.PlayerAttack && !this.unit.downed) {
+      for (let dq = -this.unit.attackRange; dq <= this.unit.attackRange; dq++) {
+        for (let dr = -this.unit.attackRange; dr <= this.unit.attackRange; dr++) {
+          const p = {
+            q: this.unit.pos.q + dq,
+            r: this.unit.pos.r + dr
+          };
+
+          if (!this.grid.inBounds(p)) continue;
+
+          const dist = Math.max(Math.abs(dq), Math.abs(dr));
+          if (dist === 0 || dist > this.unit.attackRange) continue;
+
+          const w = this.grid.gridToWorld(p);
+
+          this.drawDiamond(
+            this.overlayGfx,
+            w.x,
+            w.y,
+            0xffffff,
+            0.12,
+            0xffa6a6,
+            1
+          );
+        }
       }
     }
 
@@ -374,6 +496,32 @@ class GameScene extends Phaser.Scene {
       });
     });
   }
+
+  private runEnemyTurn(): void {
+    for (const e of this.enemies) {
+        if (e.downed) continue;
+
+        const dist = Math.max(
+        Math.abs(e.pos.q - this.unit.pos.q),
+        Math.abs(e.pos.r - this.unit.pos.r)
+        );
+
+        if (dist <= e.attackRange) {
+          this.unit.hp -= e.attackDamage;
+          if (this.unit.hp <= 0) {
+            this.unit.hp = 0;
+            this.unit.downed = true;
+            console.log("Player unit downed!");
+          }
+        }
+    }
+
+    this.phase = TurnPhase.PlayerMove;
+    this.selected = true;
+    this.reach = null;
+    this.redraw();
+  }
+
 }
 
 const config: Phaser.Types.Core.GameConfig = {
