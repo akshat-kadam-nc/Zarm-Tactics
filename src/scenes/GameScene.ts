@@ -27,7 +27,7 @@ export class GameScene extends Phaser.Scene {
   private overlayGfx!: Phaser.GameObjects.Graphics;
 
   private unit!: Unit;
-  private unitSprite!: Phaser.GameObjects.Arc;
+  private unitSprite!: Phaser.GameObjects.Sprite;
 
   private enemies: Unit[] = [];
   private phase: TurnPhase = TurnPhase.PlayerMove;
@@ -39,11 +39,25 @@ export class GameScene extends Phaser.Scene {
 
   private occupied = new Set<TileKey>();
 
-  //private hudGfx!: Phaser.GameObjects.Graphics;
   private hud!: Hud;
+
+  private hoverGfx!: Phaser.GameObjects.Graphics;
+  private hoverKey: string | null = null;
+  private hoverPath: GridPos[] = [];
 
   constructor() {
     super("game");
+  }
+
+  preload(): void {
+    this.load.spritesheet("wheeler", "../assets/sprites/wheeler.png", {
+      frameWidth: 32,
+      frameHeight: 32,
+      margin: 0,
+      spacing: 0
+    });
+
+    this.load.json("wheeler_animmap", "../assets/sprites/wheeler.animmap.json");
   }
 
   create(): void {
@@ -78,11 +92,9 @@ export class GameScene extends Phaser.Scene {
 
     this.tileGfx = this.add.graphics();
     this.overlayGfx = this.add.graphics();
+    this.hoverGfx = this.add.graphics();
 
     this.hud = new Hud(this);
-    //this.hudGfx = this.add.graphics();
-    //this.hudGfx.setScrollFactor(0);
-    //this.hudGfx.setDepth(1000);
 
     // Create a single Planeteer unit   
     this.unit = {
@@ -126,8 +138,19 @@ export class GameScene extends Phaser.Scene {
 
     this.occupied.add(keyOf(this.unit.pos));
     // Simple placeholder sprite: circle positioned on tile center
+    //const uWorld = this.grid.gridToWorld(this.unit.pos);
+    //this.unitSprite = this.add.circle(uWorld.x, uWorld.y - 10, 10, 0x3ad0ff);
+    this.ensureWheelerAnimations();
+
+    console.log("wheeler texture?", this.textures.exists("wheeler"));
+    const tex = this.textures.get("wheeler");
+    console.log("source size", tex.getSourceImage()?.width, tex.getSourceImage()?.height);
+    console.log("frames", Object.keys(tex.frames));
+    
     const uWorld = this.grid.gridToWorld(this.unit.pos);
-    this.unitSprite = this.add.circle(uWorld.x, uWorld.y - 10, 10, 0x3ad0ff);
+    this.unitSprite = this.add.sprite(uWorld.x, uWorld.y - 10, "wheeler", 0);
+    this.unitSprite.setOrigin(0.5, 0.5);
+    this.unitSprite.play("wheeler_idle");
 
     // Input
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
@@ -143,11 +166,34 @@ export class GameScene extends Phaser.Scene {
           console.log("Player waits in place.");
           this.applyEndOfMoveEffects();   // keep this if you want recovery on wait
           this.phase = TurnPhase.PlayerAttack;
+          this.clearHover();
           this.reach = null;
           this.redraw();
           return;
         }
       }
+
+      this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+        if (this.unit.downed) return;
+        
+        const gp = this.grid.worldToGrid(p.worldX, p.worldY);
+        
+        // Off-grid: clear hover preview
+        if (!gp) {
+          if (this.hoverKey !== null) {
+            this.hoverKey = null;
+            this.hoverPath = [];
+            this.hoverGfx.clear();
+          }
+          return;
+        }
+        
+        const k = keyOf(gp);
+        if (k === this.hoverKey) return; // no-op if same tile
+        
+        this.hoverKey = k;
+        this.updateHoverPreview(gp);
+      });
 
       // Handle Attack First
       if (this.phase === TurnPhase.PlayerAttack) {
@@ -258,6 +304,28 @@ export class GameScene extends Phaser.Scene {
   return r % 3 === 0 ? "ice" : "lava";
   }
 
+  private ensureWheelerAnimations(): void {
+    // Prevent duplicate animation registration if the scene restarts
+    if (this.anims.exists("wheeler_idle")) return;
+
+    const map = this.cache.json.get("wheeler_animmap");
+    const make = (key: string) => {
+      const cfg = map.animations[key];
+      this.anims.create({
+        key,
+        frames: cfg.frames.map((i: number) => ({ key: "wheeler", frame: i })),
+        frameRate: cfg.frameRate,
+        repeat: cfg.repeat
+      });
+    };
+
+    make("wheeler_idle");
+    make("wheeler_move");
+    make("wheeler_attack");
+    make("wheeler_hit");
+    make("wheeler_death");
+  }
+
   private terrainColor(terrain: Terrain, polluted: boolean): number {
     if (polluted) return 0x0a0a0a;
     
@@ -349,10 +417,73 @@ export class GameScene extends Phaser.Scene {
     // Update unit sprite position
     const uWorld = this.grid.gridToWorld(this.unit.pos);
     this.unitSprite.setPosition(uWorld.x, uWorld.y - 10);
-    this.unitSprite.setFillStyle(this.selected ? 0x3ad0ff : 0x7aa0b8);
+    //this.unitSprite.setFillStyle(this.selected ? 0x3ad0ff : 0x7aa0b8);
+    // Optional: tint for selection feedback (instead of fillStyle)
+    this.unitSprite.clearTint();
+    if (this.selected) this.unitSprite.setTint(0x9ecbff);
 
     //this.drawHud();
     this.hud.draw(this, this.unit);
+  }
+
+  private updateHoverPreview(gp: GridPos): void {
+    this.hoverGfx.clear();
+    this.hoverPath = [];
+
+    // Only show move preview when selected + PlayerMove
+    if (!(this.selected && this.phase === TurnPhase.PlayerMove)) {
+      return;
+    }
+
+    // Ensure reachability exists
+    if (!this.reach) {
+      this.reach = bfsReachable(
+        this.grid,
+        this.tiles,
+        this.unit.pos,
+        this.unit.moveRange,
+        this.occupied
+      );
+    }
+
+    const destKey = keyOf(gp);
+
+    // Unreachable: draw a faint invalid outline on hovered tile
+    if (!this.reach.reachable.has(destKey)) {
+      const w = this.grid.gridToWorld(gp);
+      this.drawDiamond(this.hoverGfx, w.x, w.y, 0xffffff, 0.03, 0xff6b6b, 1);
+      return;
+    }
+
+    // Reachable: reconstruct path and draw dotted markers
+    const path = reconstructPath(this.reach.cameFrom, this.unit.pos, gp);
+    this.hoverPath = path;
+
+    // Draw dots for path steps (skip start tile)
+    for (let i = 1; i < path.length; i++) {
+      const w = this.grid.gridToWorld(path[i]);
+
+      // Small dot slightly above tile center
+      this.hoverGfx.fillStyle(0xffffff, 0.9);
+      this.hoverGfx.fillCircle(w.x, w.y - 6, 3.2);
+
+      // Subtle ring for readability
+      this.hoverGfx.lineStyle(1, 0x9ecbff, 1);
+      this.hoverGfx.strokeCircle(w.x, w.y - 6, 3.2);
+    }
+
+    // Emphasize destination a bit
+    const wEnd = this.grid.gridToWorld(gp);
+    this.hoverGfx.fillStyle(0xffffff, 1);
+    this.hoverGfx.fillCircle(wEnd.x, wEnd.y - 6, 4.6);
+    this.hoverGfx.lineStyle(2, 0x3ad0ff, 1);
+    this.hoverGfx.strokeCircle(wEnd.x, wEnd.y - 6, 4.6);
+  }
+
+  private clearHover(): void {
+    this.hoverKey = null;
+    this.hoverPath = [];
+    this.hoverGfx.clear();
   }
 
   private drawDiamond(g: Phaser.GameObjects.Graphics, cx: number, cy: number, fill: number, fillAlpha: number, stroke: number, strokeAlpha: number): void {
@@ -374,6 +505,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private async moveUnitAlong(path: GridPos[]): Promise<void> {
+    
+    this.unitSprite.play("wheeler_move", true);
+
     // path includes start tile, so skip index 0
     for (let i = 1; i < path.length; i++) {
       const from = this.unit.pos;
@@ -389,6 +523,8 @@ export class GameScene extends Phaser.Scene {
       await this.tweenTo(this.unitSprite, w.x, w.y - 10, 130);
       this.redraw();
     }
+
+    this.unitSprite.play("wheeler_idle", true);
   }
 
   private tweenTo(obj: Phaser.GameObjects.GameObject, x: number, y: number, ms: number): Promise<void> {
@@ -463,6 +599,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.isAnyEnemyAlive()) {
       console.log("All enemies downed. Level complete.");
       this.phase = TurnPhase.PlayerMove;
+      this.clearHover();
       this.selected = true;
       this.reach = null;
       this.redraw();
@@ -514,23 +651,11 @@ export class GameScene extends Phaser.Scene {
           }
         }
 
-        /*const dist = Math.max(
-        Math.abs(e.pos.q - this.unit.pos.q),
-        Math.abs(e.pos.r - this.unit.pos.r)
-        );
-
-        if (dist <= e.attackRange) {
-          this.unit.hp -= e.attackDamage;
-          if (this.unit.hp <= 0) {
-            this.unit.hp = 0;
-            this.unit.downed = true;
-            console.log("Player unit downed!");
-          }
-        }*/
     }
 
     // End enemy turn -> player move
     this.phase = TurnPhase.PlayerMove;
+    this.clearHover();
     this.selected = true;
     this.reach = null;
     this.redraw();
@@ -538,6 +663,7 @@ export class GameScene extends Phaser.Scene {
 
   private endPlayerAttackAndStartEnemyTurn(): void {
     this.phase = TurnPhase.EnemyTurn;
+    this.clearHover();
     this.selected = false;
     this.reach = null;
     this.redraw();

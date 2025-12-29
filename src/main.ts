@@ -3,10 +3,10 @@ import { GameScene } from "./scenes/GameScene";
 
 /**
  * v0.3.0 goals:
- * - ...
+ * - 
  *
  * Next versions will add:
- * - ...
+ * - 
  */
 
 const config: Phaser.Types.Core.GameConfig = {
