@@ -14,11 +14,13 @@ import {
   type Unit, 
   type Terrain,
   type TileKey,
-  type Reachability
+  type Reachability,
 } from "../core/types";
 import { Hud } from "../ui/Hud";
 
-//export class GameScene extends Phaser.Scene {}
+const UNIT_SCALE = 0.40;
+const UNIT_ORIGIN_Y = 0.75;
+const UNIT_Y_OFFSET = -4;
 
 export class GameScene extends Phaser.Scene {
   private grid!: IsoGrid;
@@ -50,14 +52,27 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.spritesheet("wheeler", "../assets/sprites/wheeler.png", {
-      frameWidth: 32,
-      frameHeight: 32,
-      margin: 0,
-      spacing: 0
-    });
+    this.load.atlas(
+      "wheeler",
+      "../assets/sprites/wheeler_atlas.png",
+      "../assets/sprites/wheeler_atlas.json"
+    );
+    
+    this.load.json(
+      "wheeler_animmap",
+      "../assets/sprites/wheeler_atlas.animmap.json"
+    );
 
-    this.load.json("wheeler_animmap", "../assets/sprites/wheeler.animmap.json");
+    this.load.atlas(
+      "enemy_spewbot",
+      "assets/sprites/spewbot_atlas.png",
+      "assets/sprites/spewbot_atlas.json"
+    );
+    
+    this.load.json(
+      "enemy_spewbot_animmap",
+      "assets/sprites/spewbot.animmap.json"
+    );
   }
 
   create(): void {
@@ -100,6 +115,7 @@ export class GameScene extends Phaser.Scene {
     this.unit = {
     id: "p1",
     name: "Wheeler",
+    team: "player",
     pos: { q: 3, r: 4 },
     hp: 1500,
     maxHp: 1500,
@@ -109,12 +125,13 @@ export class GameScene extends Phaser.Scene {
     attackDamage: 350,
     homeTerrains: ["lava", "sand"],
     isEnemy: false,
-    downed: false
+    downed: false,
+    sprite: null as any // will be set later
     };
 
     this.enemies = [];
 
-    const enemy: Unit = {
+    /*const enemy: Unit = {
     id: "e1",
     name: "Ripper",
     pos: { q: 7, r: 4 },
@@ -126,10 +143,13 @@ export class GameScene extends Phaser.Scene {
     attackDamage: 350,
     homeTerrains: [],
     isEnemy: true,
-    downed: false
-    };
+    downed: false,
+    team: "enemy",
+    };*/
 
-    this.enemies.push(enemy);
+    //this.enemies.push(enemy);
+    const enemy = this.spawnSpewbot({ q: 7, r: 4 });
+    //this.spawnSpewbot({ q: 8, r: 3 });
     
     this.occupied.add(keyOf(enemy.pos));
     const eWorld = this.grid.gridToWorld(enemy.pos);
@@ -143,14 +163,18 @@ export class GameScene extends Phaser.Scene {
     this.ensureWheelerAnimations();
 
     console.log("wheeler texture?", this.textures.exists("wheeler"));
+    console.log("atlas loaded?", this.textures.exists("wheeler"));
     const tex = this.textures.get("wheeler");
     console.log("source size", tex.getSourceImage()?.width, tex.getSourceImage()?.height);
     console.log("frames", Object.keys(tex.frames));
     
     const uWorld = this.grid.gridToWorld(this.unit.pos);
     this.unitSprite = this.add.sprite(uWorld.x, uWorld.y - 10, "wheeler", 0);
-    this.unitSprite.setOrigin(0.5, 0.5);
+    //this.unitSprite.setOrigin(0.5, 0.5);
     this.unitSprite.play("wheeler_idle");
+    this.unitSprite.setScale(UNIT_SCALE);
+    this.unitSprite.setOrigin(0.5, UNIT_ORIGIN_Y);
+    this.unitSprite.setY(this.unitSprite.y + UNIT_Y_OFFSET);
 
     // Input
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
@@ -308,7 +332,7 @@ export class GameScene extends Phaser.Scene {
     // Prevent duplicate animation registration if the scene restarts
     if (this.anims.exists("wheeler_idle")) return;
 
-    const map = this.cache.json.get("wheeler_animmap");
+    /*const map = this.cache.json.get("wheeler_animmap");
     const make = (key: string) => {
       const cfg = map.animations[key];
       this.anims.create({
@@ -317,13 +341,45 @@ export class GameScene extends Phaser.Scene {
         frameRate: cfg.frameRate,
         repeat: cfg.repeat
       });
-    };
+    };*/
 
-    make("wheeler_idle");
-    make("wheeler_move");
-    make("wheeler_attack");
-    make("wheeler_hit");
-    make("wheeler_death");
+    const player_map = this.cache.json.get("wheeler_animmap");
+    const player_make = (key: string) => {
+      const cfg = player_map.animations[key];
+      if (this.anims.exists(key)) return;
+      
+      this.anims.create({
+        key,
+        frames: cfg.frames.map((name: string) => ({ key: player_map.atlasKey, frame: name })),
+        frameRate: cfg.frameRate,
+        repeat: cfg.repeat
+      });
+    };
+    player_make("wheeler_idle");
+    player_make("wheeler_move");
+    player_make("wheeler_attack");
+    player_make("wheeler_hit");
+    player_make("wheeler_death");
+
+    const enemy_map = this.cache.json.get("enemy_spewbot_animmap");
+    
+    const enemy_make = (key: string) => {
+      const cfg = enemy_map.animations[key];
+      if (this.anims.exists(key)) return;
+      
+      this.anims.create({
+        key,
+        frames: cfg.frames.map((name: string) => ({ key: enemy_map.atlasKey, frame: name })),
+        frameRate: cfg.frameRate,
+        repeat: cfg.repeat
+      });
+    };
+    enemy_make("enemy_spewbot_idle");
+    enemy_make("enemy_spewbot_move");
+    enemy_make("enemy_spewbot_attack");
+    enemy_make("enemy_spewbot_hit");
+    enemy_make("enemy_spewbot_death");
+
   }
 
   private terrainColor(terrain: Terrain, polluted: boolean): number {
@@ -421,6 +477,13 @@ export class GameScene extends Phaser.Scene {
     // Optional: tint for selection feedback (instead of fillStyle)
     this.unitSprite.clearTint();
     if (this.selected) this.unitSprite.setTint(0x9ecbff);
+
+    // Position enemy sprites
+    for (const e of this.enemies) {
+      const ew = this.grid.gridToWorld(e.pos);
+      e.sprite.setPosition(ew.x, ew.y - 10);
+      e.sprite.setDepth(e.sprite.y);
+    }
 
     //this.drawHud();
     this.hud.draw(this, this.unit);
@@ -581,6 +644,45 @@ export class GameScene extends Phaser.Scene {
     pathKeys.reverse();
     
     return pathKeys.map(parseKey);
+  }
+
+  private spawnSpewbot(pos: GridPos): Unit {
+    
+    const w = this.grid.gridToWorld(pos);
+    const s = this.add.sprite(w.x, w.y - 10, "enemy_spewbot", "idle_0");
+    s.setScale(UNIT_SCALE);
+    //s.setOrigin(UNIT_ORIGIN_Y, UNIT_Y_OFFSET);
+    s.setOrigin(0.5, 0.70);
+    s.play("enemy_spewbot_idle");
+
+    const unit: Unit = {
+      id: "e1",
+      name: "Ripper",
+      team: "enemy",
+      pos,
+      hp: 800,
+      maxHp: 800,
+      energy: 0,
+      moveRange: 1,
+      attackRange: 1,
+      attackDamage: 350,
+      homeTerrains: [],
+      isEnemy: true,
+      downed: false,
+      sprite: s
+    };
+    
+    // mark occupied so movement/pathing respects it
+    this.occupied.add(keyOf(pos));
+    
+    // depth rule for iso
+    //s.setDepth(s.y);
+    //unit.sprite = s;
+
+    //this.enemies.push({id: unit.id, name: "Spewbot", });
+    
+    this.enemies.push(unit);
+    return unit;
   }
 
   private polluteTile(p: GridPos): void {

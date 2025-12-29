@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "name": "spewbot",
+    "format": "phaser-atlas-frame-names"
+  },
+  "atlasKey": "enemy_spewbot",
+  "animations": {
+    "enemy_spewbot_idle": {
+      "frames": [
+        "idle_0",
+        "idle_1",
+        "idle_2",
+        "idle_3"
+      ],
+      "frameRate": 6,
+      "repeat": -1
+    },
+    "enemy_spewbot_move": {
+      "frames": [
+        "move_0",
+        "move_1",
+        "move_2",
+        "move_3",
+        "move_4",
+        "move_5"
+      ],
+      "frameRate": 10,
+      "repeat": -1
+    },
+    "enemy_spewbot_attack": {
+      "frames": [
+        "attack_0",
+        "attack_1",
+        "attack_2",
+        "attack_3",
+        "attack_4",
+        "attack_5",
+        "attack_6",
+        "attack_7"
+      ],
+      "frameRate": 12,
+      "repeat": 0
+    },
+    "enemy_spewbot_hit": {
+      "frames": [
+        "hit_0",
+        "hit_1"
+      ],
+      "frameRate": 12,
+      "repeat": 0
+    },
+    "enemy_spewbot_death": {
+      "frames": [
+        "death_0",
+        "death_1",
+        "death_2",
+        "death_3"
+      ],
+      "frameRate": 8,
+      "repeat": 0
+    }
+  }
+}

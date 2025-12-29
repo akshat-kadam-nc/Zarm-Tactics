@@ -31,6 +31,9 @@ export type Unit = {
   isEnemy: boolean;
   downed: boolean;
 
+  team: "player" | "enemy";
+  sprite: Phaser.GameObjects.Sprite;
+
   homeTerrains: Terrain[];
 };
 
